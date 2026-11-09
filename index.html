@@ -1,0 +1,2160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Office Accounts & Deed Register</title>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    const rawConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'office-ledger-live';
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    let db = null;
+    let auth = null;
+
+    if (rawConfig) {
+      try {
+        const firebaseConfig = JSON.parse(rawConfig);
+        const app = initializeApp(firebaseConfig);
+        auth = getAuth(app);
+        db = getFirestore(app);
+
+        // Expose firestore methods globally for live sync
+        window.cloudDb = db;
+        window.cloudAppId = appId;
+        window.cloudDoc = doc;
+        window.cloudSetDoc = setDoc;
+        window.cloudDeleteDoc = deleteDoc;
+        window.cloudCollection = collection;
+
+        const authPromise = initialAuthToken 
+          ? signInWithCustomToken(auth, initialAuthToken) 
+          : signInAnonymously(auth);
+
+        authPromise.then((userCred) => {
+          const user = userCred.user;
+          if (!user) return;
+          window.updateCloudStatus(true);
+
+          const txCollection = collection(db, 'artifacts', appId, 'public', 'data', 'office_transactions');
+          onSnapshot(txCollection, (snapshot) => {
+            const remoteDocs = [];
+            snapshot.forEach(docSnap => {
+              remoteDocs.push(docSnap.data());
+            });
+            window.syncRemoteRecords(remoteDocs);
+          }, (err) => {
+            console.warn("Real-time cloud listener error:", err);
+          });
+        }).catch(err => {
+          console.warn("Auth initialization failed, fallback to local:", err);
+          window.updateCloudStatus(false);
+        });
+      } catch(e) {
+        console.warn("Firebase initialization error:", e);
+        window.updateCloudStatus(false);
+      }
+    } else {
+      window.updateCloudStatus(false);
+    }
+  </script>
+<style>
+:root {
+  --bg: #f5f7fc;
+  --card: #ffffff;
+  --ink: #172033;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --accent: #2563eb;
+  --income: #047857;
+  --expense: #b91c1c;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: Arial, "Noto Sans Telugu", -apple-system, BlinkMacSystemFont, sans-serif;
+  background: radial-gradient(circle at 10% 10%, #eff6ff 0%, #fdf4ff 35%, #ecfdf5 70%, #fffbeb 100%);
+  background-attachment: fixed;
+  color: var(--ink);
+  line-height: 1.45;
+  min-height: 100vh;
+}
+
+#loginOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+.login-box {
+  background: linear-gradient(145deg, #ffffff 0%, #f8faff 100%);
+  border-radius: 14px;
+  width: 90%;
+  max-width: 410px;
+  padding: 28px 24px;
+  box-shadow: 0 16px 36px rgba(30, 58, 138, 0.18), 0 0 0 1px #cbd5e1;
+  border: 1px solid #cbd5e1;
+}
+.login-header {
+  text-align: center;
+  margin-bottom: 20px;
+}
+.login-header h2 {
+  font-size: 21px;
+  background: linear-gradient(135deg, #1e3a8a 0%, #7c3aed 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+.login-header p {
+  font-size: 13px;
+  color: var(--muted);
+}
+.login-error {
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 12px;
+  display: none;
+}
+.btn-login {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+  font-size: 14px;
+  font-weight: 700;
+  color: white;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-top: 8px;
+  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.25);
+  transition: all 0.2s;
+}
+.btn-login:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124, 58, 237, 0.35); }
+
+header {
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 40%, #581c87 100%);
+  color: white;
+  padding: 18px 20px;
+  border-bottom: 3px solid #f59e0b;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.2);
+}
+.header-wrap {
+  max-width: 1240px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+header h1 { font-size: 21px; font-weight: 800; letter-spacing: -0.3px; margin-bottom: 4px; }
+header p { margin: 0; font-size: 13px; opacity: .92; color: #e2e8f0; }
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.user-badge {
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.btn-logout {
+  background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
+  color: white;
+  border: 1px solid #fca5a5;
+  padding: 7px 15px;
+  font-size: 12px;
+  border-radius: 8px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.25);
+}
+.btn-logout:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35); }
+
+main {
+  max-width: 1240px;
+  margin: 20px auto;
+  padding: 0 14px 40px;
+}
+.card {
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 18px;
+  box-shadow: 0 6px 18px rgba(30, 58, 138, 0.05);
+  backdrop-filter: blur(8px);
+}
+.card-entry {
+  background: linear-gradient(180deg, #ffffff 0%, #f0f7ff 100%);
+  border: 1.5px solid #bfdbfe;
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.08);
+}
+.card-dashboard {
+  background: linear-gradient(180deg, #ffffff 0%, #fdfbf7 50%, #f8fafc 100%);
+  border: 1.5px solid #fed7aa;
+  box-shadow: 0 8px 24px rgba(245, 158, 11, 0.07);
+}
+.card-filters {
+  background: linear-gradient(180deg, #ffffff 0%, #f5f3ff 100%);
+  border: 1.5px solid #ddd6fe;
+  box-shadow: 0 8px 24px rgba(139, 92, 246, 0.07);
+}
+.card-records {
+  background: #ffffff;
+  border: 1.5px solid #cbd5e1;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+h2 {
+  font-size: 17px;
+  font-weight: 800;
+  margin-bottom: 16px;
+  color: #1e293b;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1.5px dashed #e2e8f0;
+  padding-bottom: 8px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.field { min-width: 0; }
+.field.span-2 { grid-column: span 2; }
+.field.span-3 { grid-column: span 3; }
+.field.span-4 { grid-column: span 4; }
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 5px;
+}
+input, select, textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 9px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  background: #ffffff;
+}
+.readonly {
+  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
+  font-weight: 800;
+  color: #0369a1;
+  border-color: #7dd3fc;
+}
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+.radio-row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  border: 1.5px solid #cbd5e1;
+  border-radius: 9px;
+}
+.radio-row label {
+  font-weight: 600;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+  margin: 0;
+  font-size: 13px;
+  color: #1e293b;
+}
+.radio-row input { width: auto; }
+
+.expense-breakdown {
+  border: 1.5px dashed #f59e0b;
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 14px 0 10px 0;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.08);
+}
+.expense-breakdown-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #92400e;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-chalana-auth {
+  background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%);
+  border: 1.5px solid #fda4af;
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 2px 6px rgba(244, 63, 94, 0.07);
+}
+.field-chalana-auth label {
+  color: #9f1239;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 800;
+}
+.chalana-badge-tag {
+  background: #f43f5e;
+  color: #ffffff;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.field-broker-auth {
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  border: 1.5px solid #fdba74;
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 2px 6px rgba(249, 115, 22, 0.07);
+}
+.field-broker-auth label {
+  color: #9a3412;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 800;
+}
+.broker-badge-tag {
+  background: #f97316;
+  color: #ffffff;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.field-ec-auth {
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border: 1.5px solid #86efac;
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 2px 6px rgba(22, 101, 52, 0.08);
+}
+.field-ec-auth label {
+  color: #166534;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 800;
+}
+.ec-badge-tag {
+  background: #16a34a;
+  color: #ffffff;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.field-banked-auth {
+  background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
+  border: 1.5px solid #d8b4fe;
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 2px 6px rgba(168, 85, 247, 0.07);
+}
+.field-banked-auth label {
+  color: #6b21a8;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 800;
+}
+.banked-badge-tag {
+  background: #a855f7;
+  color: #ffffff;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.deposit-banner {
+  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+  border: 2px solid #a855f7;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.12);
+}
+.deposit-banner.active { display: flex; }
+.deposit-badge-pill {
+  background: linear-gradient(135deg, #7e22ce 0%, #9333ea 100%);
+  color: #ffffff;
+  padding: 5px 13px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  box-shadow: 0 2px 6px rgba(126, 34, 206, 0.3);
+}
+
+tr.deposit-row {
+  background-color: #faf5ff !important;
+  border-left: 5px solid #9333ea !important;
+}
+tr.deposit-row td {
+  background-color: #faf5ff !important;
+  color: #581c87;
+}
+.deposit-tag-cell {
+  background: linear-gradient(135deg, #eeddfb 0%, #e9d5ff 100%);
+  color: #6b21a8;
+  border: 1px solid #d8b4fe;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 6px;
+  display: inline-block;
+  font-size: 11px;
+}
+.chalana-cell {
+  background: #fff1f2;
+  color: #be123c;
+  font-weight: 700;
+}
+.broker-cell {
+  background: #fff7ed;
+  color: #c2410c;
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+button {
+  border: 0;
+  border-radius: 9px;
+  padding: 10px 18px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+button#saveBtn {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: white;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
+}
+button#saveBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.4);
+}
+button.secondary {
+  background: #f1f5f9;
+  color: #334155;
+  border: 1.5px solid #cbd5e1;
+}
+button.secondary:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+button.danger {
+  background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+button.danger:hover {
+  background: #ef4444;
+  color: white;
+}
+button.green {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  color: white;
+  box-shadow: 0 3px 10px rgba(5, 150, 105, 0.25);
+}
+button.green:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px rgba(5, 150, 105, 0.35);
+}
+.smallbtn { padding: 5px 12px; font-size: 12px; border-radius: 7px; font-weight: 700; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.stat {
+  border-radius: 14px;
+  padding: 14px 16px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+.stat:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+}
+.stat small {
+  display: block;
+  font-size: 11px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+}
+.stat strong {
+  font-size: 19px;
+  font-weight: 800;
+  word-break: break-all;
+  display: block;
+}
+
+.stat-slate {
+  background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+  border: 1.5px solid #cbd5e1;
+  box-shadow: 0 3px 10px rgba(100, 116, 139, 0.08);
+}
+.stat-slate small { color: #475569; }
+.stat-slate strong { color: #0f172a; }
+
+.stat-deposit-tab {
+  background: linear-gradient(135deg, #faf5ff 0%, #ede9fe 100%);
+  border: 1.5px solid #c084fc;
+  box-shadow: 0 3px 10px rgba(168, 85, 247, 0.12);
+}
+.stat-deposit-tab small { color: #6b21a8; }
+.stat-deposit-tab strong { color: #581c87; }
+
+.stat-amber {
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  border: 1.5px solid #fcd34d;
+  box-shadow: 0 3px 10px rgba(245, 158, 11, 0.1);
+}
+.stat-amber small { color: #92400e; }
+.stat-amber strong { color: #78350f; }
+
+.stat-emerald {
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  border: 2px solid #34d399;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.15);
+}
+.stat-emerald small { color: #065f46; font-weight: 800; }
+.stat-emerald strong { color: #047857; font-size: 20px; }
+
+.stat-blue {
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border: 1.5px solid #93c5fd;
+  box-shadow: 0 3px 10px rgba(59, 130, 246, 0.1);
+}
+.stat-blue small { color: #1e40af; }
+.stat-blue strong { color: #1e3a8a; }
+
+.stat-teal {
+  background: linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%);
+  border: 1.5px solid #5eead4;
+  box-shadow: 0 3px 10px rgba(20, 184, 166, 0.1);
+}
+.stat-teal small { color: #0f766e; }
+.stat-teal strong { color: #115e59; }
+
+.stat-rose {
+  background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%);
+  border: 1.5px solid #fda4af;
+  box-shadow: 0 3px 10px rgba(244, 63, 94, 0.1);
+}
+.stat-rose small { color: #9f1239; }
+.stat-rose strong { color: #881337; }
+
+.stat-orange {
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  border: 1.5px solid #fdba74;
+  box-shadow: 0 3px 10px rgba(249, 115, 22, 0.1);
+}
+.stat-orange small { color: #9a3412; }
+.stat-orange strong { color: #7c2d12; }
+
+.stat-indigo {
+  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+  border: 1.5px solid #a5b4fc;
+  box-shadow: 0 3px 10px rgba(99, 102, 241, 0.1);
+}
+.stat-indigo small { color: #3730a3; }
+.stat-indigo strong { color: #312e81; }
+
+.filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1.5fr;
+  gap: 12px;
+  align-items: end;
+}
+.table-wrap {
+  overflow-x: auto;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+th, td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 11px 11px;
+  text-align: left;
+  white-space: nowrap;
+}
+th {
+  background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+  position: sticky;
+  top: 0;
+  font-weight: 800;
+  color: #1e293b;
+  z-index: 2;
+  border-bottom: 2px solid #cbd5e1;
+}
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.empty { text-align: center; color: var(--muted); padding: 30px; }
+
+/* Dedicated Operator Pending Status Bar */
+.operator-status-panel {
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  border: 1.5px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.op-badge-group {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.op-badge-pill {
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media(max-width: 900px) {
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .field.span-2, .field.span-4 { grid-column: span 2; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filters { grid-template-columns: 1fr 1fr; }
+  .filters .wide { grid-column: 1/-1; }
+}
+@media(max-width: 500px) {
+  .grid { grid-template-columns: 1fr; }
+  .field.span-2, .field.span-4 { grid-column: 1/-1; }
+  .stats { grid-template-columns: 1fr; }
+  .filters { grid-template-columns: 1fr; }
+}
+@media print {
+  #loginOverlay, header, #entrySection, #filterSection, .actions button, td:last-child, th:last-child { display: none !important; }
+  .card { border: none; box-shadow: none; padding: 0; }
+  table { min-width: 100%; font-size: 10.5px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Login Modal -->
+<div id="loginOverlay">
+  <div class="login-box">
+    <div class="login-header">
+      <h2>Office Account Login</h2>
+      <p>Enter your credentials to manage records</p>
+    </div>
+    <div id="loginError" class="login-error">Invalid Username or Password</div>
+    <form id="loginForm">
+      <div style="margin-bottom: 12px;">
+        <label for="loginUser">Username</label>
+        <input id="loginUser" type="text" placeholder="e.g. admin, hari, or shiva" required autofocus>
+      </div>
+      <div style="margin-bottom: 16px;">
+        <label for="loginPass">Password</label>
+        <input id="loginPass" type="password" placeholder="Enter your password" required>
+      </div>
+      <button type="submit" class="btn-login">Login to System</button>
+      <div style="margin-top: 12px; display:flex; justify-content:space-between; align-items:center; font-size:12px;">
+        <a href="javascript:void(0)" id="openForgotBtn" style="color:#1d4ed8; text-decoration:none; font-weight:600;">Forgot / Reset Password?</a>
+        <span style="color:var(--muted)">dw.mandasa@gmail.com</span>
+      </div>
+      <div style="margin-top: 12px; font-size: 11.5px; color: var(--muted); text-align: left; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:8px; line-height:1.5;">
+        <div>👑 <strong>Admin Login:</strong> <code>admin</code> / <code>admin123</code> (Full Ledger &amp; Profit Access)</div>
+        <div style="margin-top:3px;">👤 <strong>Hari Login:</strong> <code>admin</code> (or <code>hari</code>) / <code>hari123</code> (Authorized: Deeds, Chalana, Brokerage &amp; Bank Deposits)</div>
+        <div style="margin-top:3px;">👤 <strong>Shiva Login:</strong> <code>admin</code> (or <code>shiva</code>) / <code>shiva123</code> (Authorized: Deeds, Chalana, Brokerage &amp; Bank Deposits)</div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Password Reset Modal -->
+<div id="resetOverlay" style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(4px); display: none; justify-content: center; align-items: center; z-index: 10000;">
+  <div class="login-box" style="max-width: 440px;">
+    <div class="login-header">
+      <h2>Reset Account Password</h2>
+      <p>Verification via linked Google account & Mobile</p>
+    </div>
+    
+    <div id="resetMsgBox" style="display:none; padding:8px 12px; border-radius:6px; font-size:12.5px; margin-bottom:12px;"></div>
+
+    <div id="resetStep1">
+      <div style="margin-bottom: 10px;">
+        <label>Linked Google Account</label>
+        <input id="resetEmail" type="email" value="dw.mandasa@gmail.com" readonly class="readonly">
+      </div>
+      <div style="margin-bottom: 12px;">
+        <label>Registered Mobile Number</label>
+        <input id="resetMobile" type="tel" value="8187873788" readonly class="readonly">
+      </div>
+      <button type="button" class="btn-login" id="sendOtpBtn">Send Verification OTP Code</button>
+      <div style="text-align:center; margin-top:10px;">
+        <button type="button" class="secondary smallbtn" id="cancelResetBtn1">Back to Login</button>
+      </div>
+    </div>
+
+    <div id="resetStep2" style="display:none;">
+      <div style="background:#eff6ff; border:1px solid #bfdbfe; padding:8px 10px; border-radius:6px; font-size:12px; color:#1e40af; margin-bottom:12px;">
+        OTP has been generated for <strong>8187873788</strong> / <strong>dw.mandasa@gmail.com</strong>:
+        <div style="margin-top:6px; font-size:18px; font-weight:800; color:#047857; letter-spacing:3px; background:#dcfce7; padding:6px 12px; border-radius:6px; display:inline-block; border:1px dashed #22c55e;" id="displayedOtpCode">------</div>
+        <div style="font-size:11px; color:#64748b; margin-top:5px;">(Master Key: <strong>818788</strong>)</div>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <label for="otpInput">Enter 6-digit OTP Code *</label>
+        <input id="otpInput" type="text" maxlength="6" placeholder="e.g. 482910" required>
+      </div>
+      <div style="margin-bottom: 12px;">
+        <label for="newPassInput">New Password *</label>
+        <input id="newPassInput" type="password" placeholder="Enter new strong password" required>
+      </div>
+      <div style="margin-bottom: 14px;">
+        <label for="confirmPassInput">Confirm New Password *</label>
+        <input id="confirmPassInput" type="password" placeholder="Re-enter new password" required>
+      </div>
+      <button type="button" class="btn-login" id="verifyAndResetBtn">Update Password</button>
+      <div style="text-align:center; margin-top:10px;">
+        <button type="button" class="secondary smallbtn" id="cancelResetBtn2">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Account Settings Modal -->
+<div id="settingsOverlay" style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(3px); display: none; justify-content: center; align-items: center; z-index: 9998;">
+  <div class="login-box" style="max-width: 460px;">
+    <div class="login-header">
+      <h2>Account &amp; Security Profile</h2>
+      <p>Linked Office Credentials</p>
+    </div>
+    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:14px; font-size:13px; line-height:1.7;">
+      <div><strong>Linked Google:</strong> <span style="color:#1d4ed8;">dw.mandasa@gmail.com</span></div>
+      <div><strong>Registered Mobile:</strong> <span style="color:#047857;">+91 8187873788</span></div>
+      <div><strong>Active Account:</strong> <span id="settingsUserLabel">admin</span> (<span id="settingsRoleLabel" style="font-weight:700; color:#1d4ed8;">Admin</span>)</div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button type="button" class="btn-login" style="margin-top:0;" id="openDirectResetBtn">Change Password</button>
+      <button type="button" class="secondary" style="flex:1;" id="closeSettingsBtn">Close</button>
+    </div>
+  </div>
+</div>
+
+<header>
+  <div class="header-wrap">
+    <div>
+      <h1>Office Accounts &amp; Deed Register</h1>
+      <p id="headerSubtitle">Expense Tracking · Chalana · Brokerage · Bank Deposit &amp; Office Ledger</p>
+    </div>
+    <div class="header-right">
+      <div id="cloudSyncIndicator" style="display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,0.18); border:1px solid rgba(255,255,255,0.3); color:#ffffff; font-size:11px; padding:4px 10px; border-radius:20px; font-weight:700;">
+        <span id="cloudDot" style="width:8px; height:8px; border-radius:50%; background:#94a3b8; display:inline-block;"></span>
+        <span id="cloudText">Device Storage</span>
+      </div>
+      <div class="user-badge" style="cursor:pointer;" id="userProfileBadge" title="Click to view linked account">
+        👤 <span id="currentUserLabel">admin</span> <span id="roleBadgeLabel" style="background:#3b82f6; color:white; font-size:10px; padding:2px 6px; border-radius:4px; margin-left:4px; font-weight:700;">Admin</span>
+      </div>
+      <button class="smallbtn" style="background:#334155; color:white;" id="headerSettingsBtn" type="button">⚙️ Security</button>
+      <button class="btn-logout" id="logoutBtn" type="button">Logout</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- Notice Bar for Hari's Login -->
+  <div id="hariNoticeBar" style="display:none; background:#ecfdf5; border:1px solid #6ee7b7; color:#065f46; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px; font-weight:600;">
+    👋 Namaste Hari garu! You are authorized for: <strong>1) Deed Entries</strong>, <strong>2) Chalana Expenses</strong>, <strong>3) Broker Commission &amp; Broker Name</strong>, and <strong>4) Cash Deposits in Bank</strong>.
+    <div style="margin-top:6px; font-size:12px; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; padding:6px 10px; border-radius:6px;">
+      ⚠️ <strong>Approval Workflow:</strong> Every transaction you submit is listed below under your records with status <strong>⏳ Pending Admin Approval</strong> until Admin verifies and approves it.
+    </div>
+  </div>
+
+  <!-- Notice Bar for Shiva's Login -->
+  <div id="shivaNoticeBar" style="display:none; background:#eff6ff; border:1px solid #93c5fd; color:#1e40af; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px; font-weight:600;">
+    👋 Namaste Shiva garu! You are authorized for: <strong>1) Deed Entries</strong>, <strong>2) Chalana Expenses</strong>, <strong>3) Broker Commission &amp; Broker Name</strong>, and <strong>4) Cash Deposits in Bank</strong>.
+    <div style="margin-top:6px; font-size:12px; color:#b91c1c; background:#fef2f2; border:1px solid #fecaca; padding:6px 10px; border-radius:6px;">
+      ⚠️ <strong>Approval Workflow:</strong> Every transaction you submit is listed below under your records with status <strong>⏳ Pending Admin Approval</strong> until Admin verifies and approves it.
+    </div>
+  </div>
+
+  <!-- Success Confirmation Badge for Operators (Hari / Shiva) -->
+  <div id="operatorSuccessAlert" style="display:none; background:#ecfdf5; border:1.5px solid #34d399; color:#065f46; border-radius:10px; padding:14px 18px; margin-bottom:16px; font-size:13.5px; font-weight:600; box-shadow:0 3px 10px rgba(16,185,129,0.1);">
+    ✅ Entry successfully submitted! It is now visible in your records table below with status <strong>⏳ Pending Admin Approval</strong>.
+  </div>
+
+  <!-- Entry Form -->
+  <section class="card card-entry" id="entrySection">
+    <h2 id="formTitle">Transaction Entry</h2>
+
+    <div id="depositBanner" class="deposit-banner">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="deposit-badge-pill">CASH DEPOSIT IN BANK</span>
+        <span style="font-size:12.5px; color:#581c87; font-weight:600;">Office Cash is being deposited to Bank Account (Contra). Profit calculation is set to zero.</span>
+      </div>
+    </div>
+
+    <form id="txForm">
+      <div class="grid">
+        <div class="field" id="wrapCategory">
+          <label for="entryType">Entry Category *</label>
+          <select id="entryType">
+            <option value="Deed">Deed / Service Transaction</option>
+            <option value="Deposit">CASH DEPOSIT IN BANK (Contra / Office Cash)</option>
+            <option value="GeneralExpense">General Office Debit</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="txDate">Date *</label>
+          <input id="txDate" type="date" required>
+        </div>
+
+        <div class="field">
+          <label for="deedName">Name of Deed / Nature / Bank *</label>
+          <input id="deedName" list="deedList" placeholder="e.g. Sale Deed / SBI Deposit" required>
+          <datalist id="deedList">
+            <option value="Sale Deed">
+            <option value="Gift Deed">
+            <option value="Settlement Deed">
+            <option value="Mortgage Deed">
+            <option value="Partition Deed">
+            <option value="CASH DEPOSIT IN BANK">
+            <option value="General Office Account">
+          </datalist>
+        </div>
+
+        <div class="field">
+          <label for="customerName" id="lblCustomer">Customer / Bank Account *</label>
+          <input id="customerName" placeholder="Client Name or Bank Branch/A/c" required>
+        </div>
+
+        <div class="field" id="wrapVillage">
+          <label for="village">Village / Area</label>
+          <input id="village" placeholder="Village / Town name">
+        </div>
+
+        <div class="field" id="wrapMarket">
+          <label for="marketValue">Market Value (₹)</label>
+          <input id="marketValue" type="number" min="0" step="0.01" value="0">
+        </div>
+
+        <div class="field">
+          <label for="receivedAmount" id="lblReceived">Received Amount / Deposit Amount (₹) *</label>
+          <input id="receivedAmount" type="number" min="0" step="0.01" value="0" required>
+        </div>
+
+        <div class="field field-chalana-auth" id="wrapChalana">
+          <label for="chalana">
+            <span>Chalana Expense (₹)</span>
+            <span class="chalana-badge-tag">Authorized</span>
+          </label>
+          <input id="chalana" type="number" min="0" step="0.01" value="0" style="border-color:#fca5a5; font-weight:700; color:#9f1239; background:#ffffff;">
+        </div>
+
+        <div class="field field-broker-auth" id="wrapBrokerName">
+          <label for="brokerName">
+            <span>Broker / Mediator Name</span>
+            <span class="broker-badge-tag">Authorized</span>
+          </label>
+          <input id="brokerName" placeholder="Enter broker / mediator name" style="border-color:#fed7aa; font-weight:600; color:#9a3412; background:#ffffff;">
+        </div>
+
+        <div class="field field-broker-auth" id="wrapBroker">
+          <label for="brokerCommission">
+            <span>Broker Commission Paid (₹)</span>
+            <span class="broker-badge-tag">Authorized</span>
+          </label>
+          <input id="brokerCommission" type="number" min="0" step="0.01" value="0" style="border-color:#fed7aa; font-weight:700; color:#c2410c; background:#ffffff;">
+        </div>
+
+        <div class="field field-ec-auth" id="wrapEcCustomer">
+          <label for="ecCustomerAmount">
+            <span>EC/Nakal Amount Given (₹)</span>
+            <span class="ec-badge-tag">Authorized</span>
+          </label>
+          <input id="ecCustomerAmount" type="number" min="0" step="0.01" value="0" style="border-color:#86efac; font-weight:700; color:#166534; background:#ffffff;" placeholder="Amount from customer">
+        </div>
+
+        <div class="field field-ec-auth" id="wrapEcExpense">
+          <label for="ecExpense">
+            <span>EC/Nakal Expense (₹)</span>
+            <span class="ec-badge-tag">Authorized</span>
+          </label>
+          <input id="ecExpense" type="number" min="0" step="0.01" value="0" style="border-color:#86efac; font-weight:700; color:#991b1b; background:#ffffff;" placeholder="Incurred EC / Nakal cost">
+        </div>
+
+        <div class="field field-ec-auth" id="wrapEcProfit">
+          <label for="ecProfitAmount">
+            <span>EC/Nakal Profit (Auto) (₹)</span>
+          </label>
+          <input id="ecProfitAmount" class="readonly" readonly value="0.00" style="background:#ffffff; color:#047857; font-weight:800; border-color:#86efac;">
+        </div>
+
+        <div class="field" id="wrapProfit">
+          <label for="profitAmount">Total Net Profit (Auto) (₹)</label>
+          <input id="profitAmount" class="readonly" readonly value="0.00">
+        </div>
+
+        <div class="field span-2">
+          <label>Payment Mode *</label>
+          <div class="radio-row">
+            <label><input type="radio" name="paymentMode" value="Cash" checked> Cash</label>
+            <label><input type="radio" name="paymentMode" value="PhonePe"> PhonePe / Online</label>
+            <label><input type="radio" name="paymentMode" value="Both"> Split (Both)</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="expense-breakdown" id="wrapExpenses">
+        <div class="expense-breakdown-title">Internal Expense Breakdown (Admin Only)</div>
+        <div class="grid">
+          <div class="field">
+            <label for="chalanaCharges">Chalana Transaction Charges (₹)</label>
+            <input id="chalanaCharges" type="number" min="0" step="0.01" value="0">
+          </div>
+          <div class="field span-3">
+            <label for="otherExpense">Other Office Expense (₹)</label>
+            <input id="otherExpense" type="number" min="0" step="0.01" value="0">
+          </div>
+        </div>
+      </div>
+
+      <div class="grid" style="margin-top: 10px;">
+        <div class="field" id="cashWrap">
+          <label for="cashAmount">Cash Collected (₹)</label>
+          <input id="cashAmount" type="number" min="0" step="0.01" value="0">
+        </div>
+        <div class="field" id="phoneWrap">
+          <label for="phoneAmount">PhonePe / Online Paid (₹)</label>
+          <input id="phoneAmount" type="number" min="0" step="0.01" value="0">
+        </div>
+        <div class="field field-banked-auth" id="wrapCustomerDeposit">
+          <label for="customerCashDeposited">
+            <span>Cash Deposited in Bank (From Collected Cash) (₹)</span>
+            <span class="banked-badge-tag">Authorized</span>
+          </label>
+          <input id="customerCashDeposited" type="number" min="0" step="0.01" value="0" style="border-color:#d8b4fe; font-weight:800; color:#6b21a8; background:#ffffff;">
+          <div class="hint" style="margin-top:2px; font-size:10.5px; color:#7e22ce;">Amount taken from customer cash and banked by Hari / Shiva / Admin</div>
+        </div>
+        <div class="field">
+          <label for="paymentTotal">Payment Total (Auto) (₹)</label>
+          <input id="paymentTotal" class="readonly" readonly value="0.00">
+        </div>
+        <div class="field span-4">
+          <label for="remarks">Remarks / Bank Voucher No. / Counterfoil</label>
+          <input id="remarks" placeholder="Bank deposit slip #, challan ID, EC/Nakal notes, transaction reference or notes">
+        </div>
+      </div>
+
+      <p class="hint" id="formulaHint">Total Profit = (Received Amount − Chalana − Txn Charges − Broker − Other Exp) + (EC/Nakal Amount Given − EC/Nakal Expense).</p>
+
+      <div class="actions">
+        <button type="submit" id="saveBtn">Save Transaction</button>
+        <button type="button" class="secondary" id="resetBtn">Clear Form</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Summary Dashboard (Admin only) -->
+  <section class="card card-dashboard" id="dashboardSection">
+    <h2>Financial Overview</h2>
+    <div id="adminPendingNotice" style="display:none; background:#fffbeb; border:1.5px solid #fcd34d; color:#92400e; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:13px; font-weight:700; align-items:center; justify-content:space-between;">
+      <span>🔔 You have <strong id="pendingCountBadge" style="background:#f59e0b; color:white; padding:2px 8px; border-radius:12px;">0</strong> transaction(s) entered by Hari / Shiva awaiting your approval!</span>
+      <button type="button" class="smallbtn" style="background:#b45309; color:white;" onclick="filterPendingOnly()">View Pending</button>
+    </div>
+    <div class="stats">
+      <div class="stat stat-slate">
+        <small>Total Transactions</small>
+        <strong id="statCount">0</strong>
+      </div>
+      <div class="stat stat-deposit-tab">
+        <small>TOTAL CASH DEPOSITED IN BANK</small>
+        <strong id="statDeposit">₹0.00</strong>
+        <div style="font-size:10px; color:#7e22ce; margin-top:3px;" id="statDepositSub">Customer: ₹0.00 | Direct: ₹0.00</div>
+      </div>
+      <div class="stat stat-amber">
+        <small>Total Customer Cash Collected</small>
+        <strong id="statCashCollected">₹0.00</strong>
+      </div>
+      <div class="stat stat-emerald">
+        <small>NET CASH IN HAND (REMAINING)</small>
+        <strong id="statCash">₹0.00</strong>
+      </div>
+      <div class="stat stat-blue">
+        <small>Total Received (Deeds)</small>
+        <strong id="statReceived">₹0.00</strong>
+      </div>
+      <div class="stat stat-teal">
+        <small>Total Net Profit</small>
+        <strong id="statProfit">₹0.00</strong>
+      </div>
+      <div class="stat stat-rose">
+        <small>Total Chalana &amp; Charges</small>
+        <strong id="statChalana">₹0.00</strong>
+      </div>
+      <div class="stat stat-orange">
+        <small>Total Broker Commission</small>
+        <strong id="statBroker">₹0.00</strong>
+      </div>
+      <div class="stat stat-indigo">
+        <small>PhonePe / Bank Balance</small>
+        <strong id="statPhone">₹0.00</strong>
+      </div>
+    </div>
+  </section>
+
+  <!-- Filters & Actions -->
+  <section class="card card-filters" id="filterSection">
+    <h2>Search, Filter &amp; Download</h2>
+    <div class="filters">
+      <div class="field">
+        <label for="fFrom">From Date</label>
+        <input id="fFrom" type="date">
+      </div>
+      <div class="field">
+        <label for="fTo">To Date</label>
+        <input id="fTo" type="date">
+      </div>
+      <div class="field" id="wrapFilterCategory">
+        <label for="fCategory">Approval / Category</label>
+        <select id="fCategory">
+          <option value="">All Transactions</option>
+          <option value="PENDING_APPROVAL">⏳ PENDING APPROVAL ONLY</option>
+          <option value="APPROVED_ONLY">✅ APPROVED ONLY</option>
+          <option value="Deposit">Direct CASH DEPOSIT IN BANK</option>
+          <option value="HasCustomerDeposit">Transactions with Customer Cash Banked</option>
+          <option value="Deed">Deeds Only</option>
+          <option value="GeneralExpense">General Expenses Only</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="fMode">Payment Mode</label>
+        <select id="fMode">
+          <option value="">All Payment Modes</option>
+          <option value="Cash">Cash Only</option>
+          <option value="PhonePe">PhonePe Only</option>
+          <option value="Both">Split Only</option>
+        </select>
+      </div>
+      <div class="field wide">
+        <label for="fSearch">Search Deed / Bank / Customer / Broker / Remarks</label>
+        <input id="fSearch" placeholder="Type customer, deed, bank name, broker name or voucher...">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="green" id="exportBtn">Download Excel (CSV)</button>
+      <button type="button" class="secondary" id="clearFilterBtn">Reset Filters</button>
+      <button type="button" class="secondary" id="printBtn">Print Register</button>
+      <button type="button" class="secondary" style="margin-left: auto;" id="backupBtn">JSON Backup</button>
+    </div>
+  </section>
+
+  <!-- Records Table (Visible to Admin & Visible to Hari/Shiva for their submitted transactions) -->
+  <section class="card card-records" id="recordsSection">
+    <h2>
+      <span id="recordsTitleText">Account Transaction Records</span>
+      <span id="recordCountLabel" style="font-size:12px; font-weight:400; color:var(--muted)"></span>
+    </h2>
+
+    <!-- Dedicated Status Tracker for Operator Mode -->
+    <div id="operatorStatusPanel" class="operator-status-panel" style="display:none;">
+      <div>
+        <strong id="opStatusTitle" style="font-size:14px; color:#1e293b;">My Submitted Transactions:</strong>
+        <span style="font-size:12px; color:var(--muted); margin-left:6px;">All transactions you submit stay pending until Admin verifies and approves.</span>
+      </div>
+      <div class="op-badge-group">
+        <div class="op-badge-pill" style="background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;" onclick="setOperatorFilter('')">
+          All: <strong id="opStatTotal">0</strong>
+        </div>
+        <div class="op-badge-pill" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a;" onclick="setOperatorFilter('PENDING_APPROVAL')">
+          ⏳ Pending Approval: <strong id="opStatPending">0</strong>
+        </div>
+        <div class="op-badge-pill" style="background:#dcfce7; color:#166534; border:1px solid #bbf7d0;" onclick="setOperatorFilter('APPROVED_ONLY')">
+          ✅ Approved: <strong id="opStatApproved">0</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead id="recordsThead">
+          <tr>
+            <th>Date</th>
+            <th style="background:#fef3c7; color:#92400e; border-bottom:2px solid #f59e0b;">Status / Approval</th>
+            <th>Type</th>
+            <th>Deed / Purpose</th>
+            <th>Customer / Bank</th>
+            <th>Village</th>
+            <th class="chalana-col" style="text-align: right; background:#fff1f2; color:#9f1239;">Chalana (₹)</th>
+            <th class="admin-col" style="text-align: right">Txn Charges (₹)</th>
+            <th class="broker-col" style="background:#fff7ed; color:#c2410c;">Broker Name</th>
+            <th class="admin-col" style="text-align: right">Broker (₹)</th>
+            <th class="admin-col" style="text-align: right; background:#f0fdf4; color:#166534;">EC/Nakal Given (₹)</th>
+            <th class="admin-col" style="text-align: right; background:#fef2f2; color:#991b1b;">EC/Nakal Exp (₹)</th>
+            <th class="admin-col" style="text-align: right; background:#dcfce7; color:#14532d;">EC/Nakal Profit (₹)</th>
+            <th class="admin-col" style="text-align: right">Other Exp (₹)</th>
+            <th style="text-align: right">Received (₹)</th>
+            <th style="text-align: right">Cash Collected (₹)</th>
+            <th class="admin-col" style="text-align: right; background:#f5e8ff; color:#6b21a8;">Cash Deposited in Bank (₹)</th>
+            <th class="admin-col" style="text-align: right">Total Profit (₹)</th>
+            <th class="admin-col" style="text-align: right">Rajesh 50% (₹)</th>
+            <th class="admin-col" style="text-align: right">Siva 25% (₹)</th>
+            <th class="admin-col" style="text-align: right">Hari 25% (₹)</th>
+            <th>Mode</th>
+            <th style="text-align: right">PhonePe (₹)</th>
+            <th>Remarks</th>
+            <th>Entered By</th>
+            <th style="text-align: center">Action</th>
+          </tr>
+        </thead>
+        <tbody id="recordsBody">
+          <tr><td colspan="26" class="empty">No transactions saved yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = n => '₹' + (Number(n)||0).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const num = id => Math.max(0, Number($(id).value) || 0);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+window.updateCloudStatus = function(isOnline) {
+  const dot = $('cloudDot');
+  const txt = $('cloudText');
+  if (!dot || !txt) return;
+  if (isOnline) {
+    dot.style.background = '#22c55e';
+    dot.style.boxShadow = '0 0 8px #22c55e';
+    txt.textContent = 'Live Cloud Sync 🟢';
+  } else {
+    dot.style.background = '#94a3b8';
+    dot.style.boxShadow = 'none';
+    txt.textContent = 'Device Storage';
+  }
+};
+
+window.syncRemoteRecords = function(remoteList) {
+  if (Array.isArray(remoteList)) {
+    records = remoteList;
+    try {
+      localStorage.setItem('officeAccountRegisterRecords', JSON.stringify(records));
+    } catch(e) {}
+    render();
+  }
+};
+
+// Sync record to firestore if online
+function pushRecordToCloud(rec) {
+  if (window.cloudDb && window.cloudSetDoc && window.cloudDoc) {
+    try {
+      const ref = window.cloudDoc(window.cloudDb, 'artifacts', window.cloudAppId, 'public', 'data', 'office_transactions', rec.id);
+      window.cloudSetDoc(ref, rec, { merge: true }).catch(err => console.warn('Cloud setDoc error:', err));
+    } catch(e) {
+      console.warn('Sync error:', e);
+    }
+  }
+}
+
+function removeRecordFromCloud(id) {
+  if (window.cloudDb && window.cloudDeleteDoc && window.cloudDoc) {
+    try {
+      const ref = window.cloudDoc(window.cloudDb, 'artifacts', window.cloudAppId, 'public', 'data', 'office_transactions', id);
+      window.cloudDeleteDoc(ref).catch(err => console.warn('Cloud deleteDoc error:', err));
+    } catch(e) {
+      console.warn('Sync delete error:', e);
+    }
+  }
+}
+
+// Authentication & Roles
+const CREDENTIALS_KEY = 'office_account_auth_creds';
+const SESSION_KEY = 'office_account_session_user';
+const SESSION_ROLE_KEY = 'office_account_session_role';
+
+const DEFAULT_AUTH = {
+  admin: {
+    username: 'admin',
+    password: 'admin123',
+    role: 'admin',
+    email: 'dw.mandasa@gmail.com',
+    mobile: '8187873788'
+  },
+  hari: {
+    username: 'hari',
+    password: 'hari123',
+    role: 'hari',
+    name: 'Hari'
+  },
+  shiva: {
+    username: 'shiva',
+    password: 'shiva123',
+    role: 'shiva',
+    name: 'Shiva'
+  }
+};
+
+function getStoredAuth() {
+  try {
+    const raw = localStorage.getItem(CREDENTIALS_KEY);
+    if (!raw) return DEFAULT_AUTH;
+    const parsed = JSON.parse(raw);
+    return {
+      admin: parsed.admin || DEFAULT_AUTH.admin,
+      hari: parsed.hari || DEFAULT_AUTH.hari,
+      shiva: parsed.shiva || DEFAULT_AUTH.shiva
+    };
+  } catch(e) {
+    return DEFAULT_AUTH;
+  }
+}
+
+localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(getStoredAuth()));
+
+function getCurrentRole() {
+  return sessionStorage.getItem(SESSION_ROLE_KEY) || 'admin';
+}
+
+function applyRolePermissions() {
+  const role = getCurrentRole();
+  const isAdmin = role === 'admin';
+  const currentUser = sessionStorage.getItem(SESSION_KEY) || 'admin';
+
+  $('currentUserLabel').textContent = currentUser;
+  
+  if (isAdmin) {
+    $('roleBadgeLabel').textContent = 'Admin';
+    $('roleBadgeLabel').style.background = '#3b82f6';
+    $('settingsRoleLabel').textContent = 'Full Administrator';
+  } else if (role === 'hari') {
+    $('roleBadgeLabel').textContent = 'Hari (Authorized Operator)';
+    $('roleBadgeLabel').style.background = '#10b981';
+    $('settingsRoleLabel').textContent = 'Authorized Operator (Hari)';
+  } else if (role === 'shiva') {
+    $('roleBadgeLabel').textContent = 'Shiva (Authorized Operator)';
+    $('roleBadgeLabel').style.background = '#0284c7';
+    $('settingsRoleLabel').textContent = 'Authorized Operator (Shiva)';
+  }
+
+  $('settingsUserLabel').textContent = currentUser;
+
+  if (isAdmin) {
+    $('hariNoticeBar').style.display = 'none';
+    $('shivaNoticeBar').style.display = 'none';
+    $('dashboardSection').style.display = 'block';
+    $('filterSection').style.display = 'block';
+    $('recordsSection').style.display = 'block';
+    $('recordsTitleText').textContent = 'Account Transaction Records (Full Master Register)';
+    $('operatorStatusPanel').style.display = 'none';
+    $('wrapExpenses').style.display = 'block';
+    $('wrapProfit').style.display = 'block';
+    $('wrapCategory').style.display = 'block';
+    $('wrapCustomerDeposit').style.display = 'block';
+    $('wrapFilterCategory').style.display = 'block';
+    $('formulaHint').style.display = 'block';
+    $('backupBtn').style.display = 'inline-block';
+    $('wrapChalana').style.display = 'block';
+    $('wrapBroker').style.display = 'block';
+    $('wrapBrokerName').style.display = 'block';
+    $('wrapEcCustomer').style.display = 'block';
+    $('wrapEcExpense').style.display = 'block';
+    $('wrapEcProfit').style.display = 'block';
+    
+    // Show all columns for admin
+    document.querySelectorAll('.admin-col').forEach(el => el.style.display = '');
+    document.querySelectorAll('.chalana-col').forEach(el => el.style.display = '');
+    document.querySelectorAll('.broker-col').forEach(el => el.style.display = '');
+  } else {
+    // Authorized operator login view (Hari or Shiva)
+    $('hariNoticeBar').style.display = (role === 'hari') ? 'block' : 'none';
+    $('shivaNoticeBar').style.display = (role === 'shiva') ? 'block' : 'none';
+    $('dashboardSection').style.display = 'none';
+    
+    // Filters and Records table are now visible for Hari & Shiva!
+    $('filterSection').style.display = 'block';
+    $('recordsSection').style.display = 'block';
+    $('recordsTitleText').textContent = (role === 'hari' ? "Hari's" : "Shiva's") + ' Submitted Transactions & Approval Status';
+    $('operatorStatusPanel').style.display = 'flex';
+    $('opStatusTitle').textContent = (role === 'hari' ? 'Hari:' : 'Shiva:') + ' Submitted Records Overview';
+
+    $('wrapExpenses').style.display = 'none';
+    $('wrapProfit').style.display = 'none';
+    $('wrapCategory').style.display = 'block';
+    $('wrapCustomerDeposit').style.display = 'block';
+    $('wrapFilterCategory').style.display = 'block';
+    $('formulaHint').style.display = 'none';
+    $('backupBtn').style.display = 'none';
+    $('wrapChalana').style.display = 'block';
+    $('wrapBroker').style.display = 'block';
+    $('wrapBrokerName').style.display = 'block';
+    $('wrapEcCustomer').style.display = 'block';
+    $('wrapEcExpense').style.display = 'block';
+    $('wrapEcProfit').style.display = 'block';
+
+    // Strictly hide internal admin columns (profit calculations, splits, transaction charges) from operator view
+    document.querySelectorAll('.admin-col').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('.chalana-col').forEach(el => el.style.display = '');
+    document.querySelectorAll('.broker-col').forEach(el => el.style.display = '');
+  }
+}
+
+function checkAuth() {
+  const user = sessionStorage.getItem(SESSION_KEY);
+  if (!user) {
+    $('loginOverlay').style.display = 'flex';
+  } else {
+    $('loginOverlay').style.display = 'none';
+    applyRolePermissions();
+  }
+}
+
+$('loginForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const u = $('loginUser').value.trim();
+  const p = $('loginPass').value.trim();
+  const authData = getStoredAuth();
+
+  let matchedUser = null;
+
+  if ((u.toLowerCase() === authData.admin.username.toLowerCase() || u.toLowerCase() === (authData.admin.email || '').toLowerCase()) && p === authData.admin.password) {
+    matchedUser = { username: authData.admin.username, role: 'admin' };
+  } else if ((u.toLowerCase() === 'admin' || u.toLowerCase() === 'hari') && p === authData.hari.password) {
+    matchedUser = { username: 'hari', role: 'hari' };
+  } else if ((u.toLowerCase() === 'admin' || u.toLowerCase() === 'shiva' || u.toLowerCase() === 'siva') && p === authData.shiva.password) {
+    matchedUser = { username: 'shiva', role: 'shiva' };
+  }
+
+  if (matchedUser) {
+    sessionStorage.setItem(SESSION_KEY, matchedUser.username);
+    sessionStorage.setItem(SESSION_ROLE_KEY, matchedUser.role);
+    $('loginError').style.display = 'none';
+    $('loginOverlay').style.display = 'none';
+    $('loginForm').reset();
+    applyRolePermissions();
+    render();
+  } else {
+    $('loginError').style.display = 'block';
+    $('loginError').textContent = 'Invalid credentials. Please enter the correct password.';
+  }
+});
+
+$('logoutBtn').addEventListener('click', () => {
+  sessionStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(SESSION_ROLE_KEY);
+  checkAuth();
+});
+
+// Password Reset
+let generatedOtp = null;
+
+function showResetMessage(msg, isSuccess = false) {
+  const box = $('resetMsgBox');
+  box.style.display = 'block';
+  box.style.background = isSuccess ? '#dcfce7' : '#fee2e2';
+  box.style.color = isSuccess ? '#166534' : '#991b1b';
+  box.style.border = isSuccess ? '1px solid #86efac' : '1px solid #fca5a5';
+  box.textContent = msg;
+}
+
+$('openForgotBtn').addEventListener('click', () => {
+  $('loginOverlay').style.display = 'none';
+  $('resetOverlay').style.display = 'flex';
+  $('resetStep1').style.display = 'block';
+  $('resetStep2').style.display = 'none';
+  $('resetMsgBox').style.display = 'none';
+});
+
+$('cancelResetBtn1').addEventListener('click', () => {
+  $('resetOverlay').style.display = 'none';
+  $('loginOverlay').style.display = 'flex';
+});
+
+$('cancelResetBtn2').addEventListener('click', () => {
+  $('resetOverlay').style.display = 'none';
+  $('loginOverlay').style.display = 'flex';
+});
+
+$('userProfileBadge').addEventListener('click', () => {
+  $('settingsOverlay').style.display = 'flex';
+});
+
+$('headerSettingsBtn').addEventListener('click', () => {
+  $('settingsOverlay').style.display = 'flex';
+});
+
+$('closeSettingsBtn').addEventListener('click', () => {
+  $('settingsOverlay').style.display = 'none';
+});
+
+$('openDirectResetBtn').addEventListener('click', () => {
+  $('settingsOverlay').style.display = 'none';
+  $('resetOverlay').style.display = 'flex';
+  $('resetStep1').style.display = 'block';
+  $('resetStep2').style.display = 'none';
+  $('resetMsgBox').style.display = 'none';
+});
+
+$('sendOtpBtn').addEventListener('click', () => {
+  generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
+  $('resetStep1').style.display = 'none';
+  $('resetStep2').style.display = 'block';
+  
+  $('displayedOtpCode').textContent = generatedOtp;
+  $('otpInput').value = generatedOtp;
+  
+  showResetMessage(`Verification OTP Code: ${generatedOtp} (Generated for 8187873788 & dw.mandasa@gmail.com)`, true);
+});
+
+$('verifyAndResetBtn').addEventListener('click', () => {
+  const enteredOtp = $('otpInput').value.trim();
+  const newPass = $('newPassInput').value.trim();
+  const confirmPass = $('confirmPassInput').value.trim();
+
+  const isMasterKey = (enteredOtp === '818788' || enteredOtp === '818787');
+  if (enteredOtp !== generatedOtp && !isMasterKey) {
+    showResetMessage('Invalid verification OTP code. Please enter the displayed 6-digit code or Master Key (818788).', false);
+    return;
+  }
+  if (!newPass || newPass.length < 4) {
+    showResetMessage('Password must be at least 4 characters long.', false);
+    return;
+  }
+  if (newPass !== confirmPass) {
+    showResetMessage('New passwords do not match. Please verify.', false);
+    return;
+  }
+
+  const authData = getStoredAuth();
+  const activeRole = getCurrentRole();
+  if (activeRole === 'hari') {
+    authData.hari.password = newPass;
+  } else if (activeRole === 'shiva') {
+    authData.shiva.password = newPass;
+  } else {
+    authData.admin.password = newPass;
+  }
+  localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(authData));
+
+  showResetMessage('Password updated successfully! Redirecting to login...', true);
+  setTimeout(() => {
+    $('resetOverlay').style.display = 'none';
+    $('loginOverlay').style.display = 'flex';
+    $('otpInput').value = '';
+    $('newPassInput').value = '';
+    $('confirmPassInput').value = '';
+    $('loginPass').value = '';
+    $('loginError').style.display = 'none';
+  }, 1400);
+});
+
+// Records & Calculations
+let records = [];
+let editingId = null;
+
+try {
+  records = JSON.parse(localStorage.getItem('officeAccountRegisterRecords') || '[]');
+} catch(e) {
+  records = [];
+}
+
+function getPaymentMode() {
+  const el = document.querySelector('input[name="paymentMode"]:checked');
+  return el ? el.value : 'Cash';
+}
+
+function handleCategoryChange() {
+  const role = getCurrentRole();
+  const isOperator = (role === 'hari' || role === 'shiva');
+  const cat = $('entryType').value;
+  const isDeposit = cat === 'Deposit';
+  
+  if (isDeposit) {
+    $('depositBanner').classList.add('active');
+    $('lblCustomer').textContent = 'Bank Name & A/c *';
+    $('lblReceived').textContent = 'Direct Cash Deposited in Bank (₹) *';
+    $('deedName').value = $('deedName').value || 'CASH DEPOSIT IN BANK';
+    $('customerName').placeholder = 'e.g. SBI Current A/c - 1234';
+    $('wrapExpenses').style.display = 'none';
+    $('wrapChalana').style.display = 'none';
+    $('wrapBroker').style.display = 'none';
+    $('wrapBrokerName').style.display = 'none';
+    $('wrapEcCustomer').style.display = 'none';
+    $('wrapEcExpense').style.display = 'none';
+    $('wrapEcProfit').style.display = 'none';
+    $('wrapMarket').style.display = 'none';
+    $('wrapVillage').style.display = 'none';
+    $('wrapCustomerDeposit').style.display = 'none';
+    $('formulaHint').textContent = 'Note: Direct Cash Deposited in Bank transfers cash into your bank account (Contra).';
+  } else {
+    $('depositBanner').classList.remove('active');
+    $('lblCustomer').textContent = 'Customer / Client Name *';
+    $('lblReceived').textContent = 'Received Amount (₹) *';
+    $('customerName').placeholder = 'Full name of party';
+    $('wrapMarket').style.display = 'block';
+    $('wrapVillage').style.display = 'block';
+    $('wrapChalana').style.display = 'block';
+    $('wrapBroker').style.display = 'block';
+    $('wrapBrokerName').style.display = 'block';
+    $('wrapEcCustomer').style.display = 'block';
+    $('wrapEcExpense').style.display = 'block';
+    $('wrapEcProfit').style.display = 'block';
+    $('wrapCustomerDeposit').style.display = 'block';
+
+    if (!isOperator) {
+      $('wrapExpenses').style.display = 'block';
+      $('formulaHint').textContent = 'Total Profit = (Received Amount − Chalana − Txn Charges − Broker − Other Exp) + (EC/Nakal Amount Given − EC/Nakal Expense).';
+    } else {
+      $('wrapExpenses').style.display = 'none';
+    }
+    if ($('deedName').value === 'CASH DEPOSIT IN BANK') $('deedName').value = '';
+  }
+  calculate();
+}
+
+$('entryType').addEventListener('change', handleCategoryChange);
+
+function calculate() {
+  const cat = $('entryType').value;
+  const isDeposit = cat === 'Deposit';
+  const received = num('receivedAmount');
+
+  const ecCustomer = !isDeposit ? num('ecCustomerAmount') : 0;
+  const ecExpense = !isDeposit ? num('ecExpense') : 0;
+  const ecProfit = isDeposit ? 0 : (ecCustomer - ecExpense);
+  $('ecProfitAmount').value = ecProfit.toFixed(2);
+
+  let chalana = 0, chalanaCharges = 0, broker = 0, other = 0, deedProfit = 0, totalProfit = 0;
+  if (!isDeposit) {
+    chalana = num('chalana');
+    chalanaCharges = num('chalanaCharges');
+    broker = num('brokerCommission');
+    other = num('otherExpense');
+    deedProfit = received - (chalana + chalanaCharges + broker + other);
+    totalProfit = deedProfit + ecProfit;
+  }
+
+  $('profitAmount').value = totalProfit.toFixed(2);
+
+  const mode = getPaymentMode();
+  $('cashWrap').style.display = (mode === 'Cash' || mode === 'Both') ? 'block' : 'none';
+  $('phoneWrap').style.display = (mode === 'PhonePe' || mode === 'Both') ? 'block' : 'none';
+
+  if (mode === 'Cash') {
+    $('cashAmount').value = received.toFixed(2);
+    $('phoneAmount').value = '0';
+  } else if (mode === 'PhonePe') {
+    $('phoneAmount').value = received.toFixed(2);
+    $('cashAmount').value = '0';
+    $('customerCashDeposited').value = '0';
+  }
+
+  const c = num('cashAmount');
+  const p = num('phoneAmount');
+  $('paymentTotal').value = (c + p).toFixed(2);
+}
+
+[
+  'receivedAmount', 'chalana', 'chalanaCharges',
+  'brokerCommission', 'ecCustomerAmount', 'ecExpense',
+  'otherExpense', 'cashAmount', 'phoneAmount', 'marketValue', 'customerCashDeposited'
+].forEach(id => {
+  $(id).addEventListener('input', () => {
+    if (getPaymentMode() !== 'Both' && (id === 'cashAmount' || id === 'phoneAmount')) return;
+    calculate();
+  });
+});
+
+document.querySelectorAll('input[name="paymentMode"]').forEach(el => el.addEventListener('change', calculate));
+
+function resetForm() {
+  $('txForm').reset();
+  editingId = null;
+  $('txDate').value = new Date().toISOString().slice(0, 10);
+  $('entryType').value = 'Deed';
+  $('brokerName').value = '';
+  [
+    'marketValue', 'receivedAmount', 'chalana',
+    'chalanaCharges', 'brokerCommission', 'ecCustomerAmount', 'ecExpense',
+    'otherExpense', 'cashAmount', 'phoneAmount', 'customerCashDeposited'
+  ].forEach(id => $(id).value = '0');
+  $('saveBtn').textContent = 'Save Transaction';
+  $('formTitle').textContent = 'Transaction Entry';
+  document.querySelector('input[name="paymentMode"][value="Cash"]').checked = true;
+  handleCategoryChange();
+}
+
+$('resetBtn').addEventListener('click', resetForm);
+
+// Form Submission with Pending Approval Logic
+$('txForm').addEventListener('submit', e => {
+  e.preventDefault();
+  if (!$('txDate').value || !$('deedName').value.trim() || !$('customerName').value.trim()) return;
+
+  const currentRole = getCurrentRole();
+  const isOperator = (currentRole === 'hari' || currentRole === 'shiva');
+  const cat = $('entryType').value;
+  const isDeposit = cat === 'Deposit';
+  const mode = getPaymentMode();
+  const cash = num('cashAmount');
+  const phone = num('phoneAmount');
+  const received = num('receivedAmount');
+  const custBanked = !isDeposit ? num('customerCashDeposited') : 0;
+
+  if (!isDeposit && custBanked > cash) {
+    alert('Cash Deposited to Bank cannot exceed the total cash collected from customer (₹' + cash.toFixed(2) + ').');
+    return;
+  }
+
+  if (mode === 'Both' && Math.abs(cash + phone - received) > 0.05) {
+    const proceed = window.confirm('Cash + PhonePe total does not equal Received Amount. Save anyway?');
+    if (!proceed) return;
+  }
+
+  const existingRec = editingId ? records.find(x => x.id === editingId) : null;
+
+  const chalana = isDeposit ? 0 : num('chalana');
+  const broker = isDeposit ? 0 : num('brokerCommission');
+  const brokerName = isDeposit ? '' : $('brokerName').value.trim();
+  const ecCustomerAmount = isDeposit ? 0 : num('ecCustomerAmount');
+  const ecExpense = isDeposit ? 0 : num('ecExpense');
+  const ecProfit = isDeposit ? 0 : (ecCustomerAmount - ecExpense);
+
+  const chalanaCharges = isDeposit ? 0 : (isOperator ? (existingRec ? existingRec.chalanaCharges : 0) : num('chalanaCharges'));
+  const other = isDeposit ? 0 : (isOperator ? (existingRec ? existingRec.otherExpense : 0) : num('otherExpense'));
+  const finalCustBanked = isDeposit ? 0 : custBanked;
+
+  const deedProfit = isDeposit ? 0 : (received - (chalana + chalanaCharges + broker + other));
+  const totalProfit = isDeposit ? 0 : (deedProfit + ecProfit);
+
+  // If entered by Hari or Shiva, status is always 'Pending' until Admin approves
+  let approvalStatus = 'Approved';
+  if (isOperator) {
+    approvalStatus = 'Pending';
+  } else if (existingRec) {
+    approvalStatus = existingRec.status || 'Approved';
+  }
+
+  const newRecord = {
+    id: editingId || 'rec_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+    entryType: cat,
+    date: $('txDate').value,
+    deedName: $('deedName').value.trim(),
+    customerName: $('customerName').value.trim(),
+    village: isDeposit ? '' : $('village').value.trim(),
+    marketValue: isDeposit ? 0 : num('marketValue'),
+    received: received,
+    chalana: chalana,
+    chalanaCharges: chalanaCharges,
+    brokerCommission: broker,
+    brokerName: brokerName,
+    ecCustomerAmount: ecCustomerAmount,
+    ecExpense: ecExpense,
+    ecProfit: ecProfit,
+    otherExpense: other,
+    profit: totalProfit,
+    rajesh: (!isDeposit && totalProfit > 0) ? (totalProfit * 0.50) : 0,
+    siva: (!isDeposit && totalProfit > 0) ? (totalProfit * 0.25) : 0,
+    hari: (!isDeposit && totalProfit > 0) ? (totalProfit * 0.25) : 0,
+    paymentMode: mode,
+    cash: mode === 'PhonePe' ? 0 : cash,
+    phone: mode === 'Cash' ? 0 : phone,
+    customerCashDeposited: finalCustBanked,
+    remarks: $('remarks').value.trim(),
+    enteredBy: existingRec ? (existingRec.enteredBy || currentRole) : currentRole,
+    status: approvalStatus,
+    approvedAt: approvalStatus === 'Approved' ? (existingRec?.approvedAt || new Date().toISOString()) : null,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (editingId) {
+    records = records.map(x => x.id === editingId ? newRecord : x);
+  } else {
+    records.push(newRecord);
+  }
+
+  localStorage.setItem('officeAccountRegisterRecords', JSON.stringify(records));
+  pushRecordToCloud(newRecord);
+  resetForm();
+
+  if (isOperator) {
+    const alertBox = $('operatorSuccessAlert');
+    if (alertBox) {
+      alertBox.style.display = 'block';
+      setTimeout(() => { alertBox.style.display = 'none'; }, 6000);
+    }
+  }
+
+  render();
+});
+
+function getFilteredList() {
+  const currentRole = getCurrentRole();
+  const isAdmin = currentRole === 'admin';
+  const from = $('fFrom').value;
+  const to = $('fTo').value;
+  const cat = $('fCategory').value;
+  const mode = $('fMode').value;
+  const q = $('fSearch').value.trim().toLowerCase();
+
+  return records.filter(r => {
+    // Hari sees only Hari's entries, Shiva sees Shiva's entries, Admin sees all
+    if (!isAdmin && r.enteredBy !== currentRole) {
+      return false;
+    }
+
+    if (from && r.date < from) return false;
+    if (to && r.date > to) return false;
+
+    if (cat === 'PENDING_APPROVAL') {
+      if (r.status !== 'Pending') return false;
+    } else if (cat === 'APPROVED_ONLY') {
+      if (r.status !== 'Approved') return false;
+    } else if (cat === 'HasCustomerDeposit') {
+      if (!(Number(r.customerCashDeposited) > 0)) return false;
+    } else if (cat && (r.entryType || 'Deed') !== cat) {
+      return false;
+    }
+
+    if (mode && r.paymentMode !== mode) return false;
+    if (q) {
+      const rowText = [r.deedName, r.customerName, r.brokerName, r.village, r.remarks, r.entryType, r.enteredBy, r.status].join(' ').toLowerCase();
+      if (!rowText.includes(q)) return false;
+    }
+    return true;
+  }).sort((a, b) => b.date.localeCompare(a.date));
+}
+
+window.approveRecord = function(id) {
+  const isAdmin = getCurrentRole() === 'admin';
+  if (!isAdmin) {
+    alert('Only Admin has authority to approve pending transactions.');
+    return;
+  }
+  const r = records.find(x => x.id === id);
+  if (!r) return;
+  r.status = 'Approved';
+  r.approvedAt = new Date().toISOString();
+  localStorage.setItem('officeAccountRegisterRecords', JSON.stringify(records));
+  pushRecordToCloud(r);
+  render();
+};
+
+window.filterPendingOnly = function() {
+  $('fCategory').value = 'PENDING_APPROVAL';
+  render();
+};
+
+window.setOperatorFilter = function(filterVal) {
+  $('fCategory').value = filterVal;
+  render();
+};
+
+function render() {
+  const currentRole = getCurrentRole();
+  const isAdmin = currentRole === 'admin';
+
+  // Update Operator Stats (Hari / Shiva)
+  if (!isAdmin) {
+    const myRecords = records.filter(r => r.enteredBy === currentRole);
+    const myPending = myRecords.filter(r => r.status === 'Pending').length;
+    const myApproved = myRecords.filter(r => r.status === 'Approved').length;
+
+    $('opStatTotal').textContent = myRecords.length;
+    $('opStatPending').textContent = myPending;
+    $('opStatApproved').textContent = myApproved;
+  }
+
+  // Count pending operator approvals for Admin Notice
+  const pendingCount = records.filter(r => r.status === 'Pending').length;
+  const pendingNotice = $('adminPendingNotice');
+  if (pendingNotice) {
+    if (isAdmin && pendingCount > 0) {
+      pendingNotice.style.display = 'flex';
+      $('pendingCountBadge').textContent = pendingCount;
+    } else {
+      pendingNotice.style.display = 'none';
+    }
+  }
+
+  const list = getFilteredList();
+  $('recordCountLabel').textContent = `(${list.length} shown)`;
+  const body = $('recordsBody');
+
+  const totalCols = isAdmin ? 26 : 14;
+
+  if (!list.length) {
+    body.innerHTML = `<tr><td colspan="${totalCols}" class="empty">No matching records found.</td></tr>`;
+  } else {
+    body.innerHTML = list.map(r => {
+      const isDirectDeposit = r.entryType === 'Deposit';
+      const custBankedVal = Number(r.customerCashDeposited) || 0;
+      const hasBankedCustomer = custBankedVal > 0;
+      const isPending = r.status === 'Pending';
+
+      let rowClass = '';
+      if (isPending) {
+        rowClass = 'style="background-color:#fffbeb !important; border-left: 5px solid #f59e0b !important;"';
+      } else if (isAdmin && (isDirectDeposit || hasBankedCustomer)) {
+        rowClass = 'class="deposit-row"';
+      }
+
+      let statusBadge = '';
+      if (isPending) {
+        statusBadge = `<span style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; font-size:11.5px; font-weight:800; padding:4px 8px; border-radius:6px; display:inline-flex; align-items:center; gap:5px; box-shadow:0 1px 3px rgba(245,158,11,0.15);">⏳ Pending Approval</span>`;
+      } else {
+        statusBadge = `<span style="background:#dcfce7; color:#166534; border:1px solid #bbf7d0; font-size:11.5px; font-weight:800; padding:4px 8px; border-radius:6px; display:inline-flex; align-items:center; gap:5px;">✅ Approved</span>`;
+      }
+
+      let typeTag = '';
+      if (isDirectDeposit) {
+        typeTag = `<span class="deposit-tag-cell">DIRECT BANK DEPOSIT</span>`;
+      } else if (hasBankedCustomer && isAdmin) {
+        typeTag = `<span class="deposit-tag-cell" style="background:#f3e8ff;">BANKED (₹${custBankedVal.toLocaleString('en-IN')})</span>`;
+      } else {
+        typeTag = `<span style="color:#64748b; font-size:11px;">${r.entryType || 'Deed'}</span>`;
+      }
+
+      const bankedAmountDisplay = isDirectDeposit 
+        ? `<span class="deposit-tag-cell">${money(r.received)}</span>` 
+        : (custBankedVal > 0 ? `<span class="deposit-tag-cell">${money(custBankedVal)}</span>` : '-');
+
+      let creatorBadge = '';
+      if (r.enteredBy === 'hari') {
+        creatorBadge = `<span style="background:#d1fae5; color:#065f46; font-size:10.5px; padding:2px 6px; border-radius:4px; font-weight:700;">Hari</span>`;
+      } else if (r.enteredBy === 'shiva') {
+        creatorBadge = `<span style="background:#e0f2fe; color:#0369a1; font-size:10.5px; padding:2px 6px; border-radius:4px; font-weight:700;">Shiva</span>`;
+      } else {
+        creatorBadge = `<span style="background:#f1f5f9; color:#334155; font-size:10.5px; padding:2px 6px; border-radius:4px;">Admin</span>`;
+      }
+
+      // Approve button is only shown to Admin!
+      const approveBtn = (isAdmin && isPending) 
+        ? `<button class="smallbtn green" style="background:#10b981; color:white; margin-right:4px;" onclick="approveRecord('${r.id}')">✓ Approve</button>` 
+        : '';
+
+      const ecCustVal = Number(r.ecCustomerAmount) || 0;
+      const ecExpVal = Number(r.ecExpense) || 0;
+      const computedEcProfit = (typeof r.ecProfit !== 'undefined' && r.ecProfit !== null) ? Number(r.ecProfit) : (ecCustVal - ecExpVal);
+
+      const ecCustDisplay = (ecCustVal > 0) ? money(ecCustVal) : '-';
+      const ecExpDisplay = (ecExpVal > 0) ? money(ecExpVal) : '-';
+      let ecProfDisplay = '-';
+      if (ecCustVal > 0 || ecExpVal > 0) {
+        if (computedEcProfit > 0) {
+          ecProfDisplay = `<span style="background:#dcfce7; color:#14532d; padding:2px 7px; border-radius:4px; font-weight:800;">+${money(computedEcProfit)}</span>`;
+        } else if (computedEcProfit < 0) {
+          ecProfDisplay = `<span style="background:#fee2e2; color:#991b1b; padding:2px 7px; border-radius:4px; font-weight:800;">-${money(Math.abs(computedEcProfit))}</span>`;
+        } else {
+          ecProfDisplay = `<span style="color:#047857; font-weight:700;">${money(0)}</span>`;
+        }
+      }
+
+      const brokerNameDisplay = r.brokerName ? `<span style="color:#c2410c; font-weight:700;">${esc(r.brokerName)}</span>` : '-';
+
+      // Action buttons: If operator, they can edit their pending submissions before approval
+      const editBtn = `<button class="smallbtn secondary" onclick="editRecord('${r.id}')">Edit</button>`;
+      const deleteBtn = isAdmin ? `<button class="smallbtn danger" onclick="deleteRecord('${r.id}')">Delete</button>` : '';
+
+      return `<tr ${rowClass}>
+        <td>${esc(r.date)}</td>
+        <td>${statusBadge}</td>
+        <td>${typeTag}</td>
+        <td><strong>${esc(r.deedName)}</strong></td>
+        <td>${esc(r.customerName)}</td>
+        <td>${esc(r.village || '-')}</td>
+        <td class="num chalana-col chalana-cell">${isDirectDeposit ? '-' : money(r.chalana)}</td>
+        ${isAdmin ? `<td class="num c-expense admin-col">${isDirectDeposit ? '-' : money(r.chalanaCharges)}</td>` : ''}
+        <td class="broker-col">${isDirectDeposit ? '-' : brokerNameDisplay}</td>
+        ${isAdmin ? `<td class="num c-expense admin-col">${isDirectDeposit ? '-' : money(r.brokerCommission)}</td>` : ''}
+        ${isAdmin ? `<td class="num admin-col" style="color:#166534; font-weight:700; background:#f0fdf4;">${isDirectDeposit ? '-' : ecCustDisplay}</td>` : ''}
+        ${isAdmin ? `<td class="num admin-col" style="color:#991b1b; font-weight:700; background:#fef2f2;">${isDirectDeposit ? '-' : ecExpDisplay}</td>` : ''}
+        ${isAdmin ? `<td class="num admin-col" style="font-weight:800; background:#ecfdf5;">${isDirectDeposit ? '-' : ecProfDisplay}</td>` : ''}
+        ${isAdmin ? `<td class="num c-expense admin-col">${isDirectDeposit ? '-' : money(r.otherExpense)}</td>` : ''}
+        <td class="num ${isDirectDeposit ? 'c-deposit' : ''}">${money(r.received)}</td>
+        <td class="num">${money(r.cash)}</td>
+        ${isAdmin ? `<td class="num admin-col" style="background:#faf5ff;">${bankedAmountDisplay}</td>` : ''}
+        ${isAdmin ? `<td class="num c-profit admin-col">${isDirectDeposit ? '-' : money(r.profit)}</td>` : ''}
+        ${isAdmin ? `<td class="num c-rajesh admin-col">${isDirectDeposit ? '-' : money(r.rajesh)}</td>` : ''}
+        ${isAdmin ? `<td class="num c-siva admin-col">${isDirectDeposit ? '-' : money(r.siva)}</td>` : ''}
+        ${isAdmin ? `<td class="num c-hari admin-col">${isDirectDeposit ? '-' : money(r.hari)}</td>` : ''}
+        <td>${esc(r.paymentMode)}</td>
+        <td class="num">${money(r.phone)}</td>
+        <td>${esc(r.remarks || '-')}</td>
+        <td>${creatorBadge}</td>
+        <td style="white-space: nowrap; text-align: center;">
+          ${approveBtn}
+          ${editBtn}
+          ${deleteBtn}
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Dashboard Aggregations for Admin
+  if (isAdmin) {
+    const deedRecords = list.filter(r => r.entryType !== 'Deposit');
+    const depositRecords = list.filter(r => r.entryType === 'Deposit');
+
+    const sumList = (items, key) => items.reduce((acc, r) => acc + (Number(r[key]) || 0), 0);
+
+    const directBankDeposits = sumList(depositRecords, 'received');
+    const customerCashBanked = sumList(deedRecords, 'customerCashDeposited');
+    const grandTotalBankDeposited = directBankDeposits + customerCashBanked;
+
+    const totalCustomerCash = sumList(deedRecords, 'cash');
+    const totalReceivedDeeds = sumList(deedRecords, 'received');
+    const totalProfit = sumList(deedRecords, 'profit');
+    const totalChalana = sumList(deedRecords, 'chalana') + sumList(deedRecords, 'chalanaCharges');
+    const totalBroker = sumList(deedRecords, 'brokerCommission');
+
+    const remainingCashInHand = Math.max(0, totalCustomerCash - customerCashBanked - directBankDeposits);
+    const totalPhone = sumList(list, 'phone');
+
+    $('statCount').textContent = list.length;
+    $('statDeposit').textContent = money(grandTotalBankDeposited);
+    $('statDepositSub').textContent = `Customer: ${money(customerCashBanked)} | Direct: ${money(directBankDeposits)}`;
+    $('statCashCollected').textContent = money(totalCustomerCash);
+    $('statCash').textContent = money(remainingCashInHand);
+    $('statReceived').textContent = money(totalReceivedDeeds);
+    $('statProfit').textContent = money(totalProfit);
+    $('statChalana').textContent = money(totalChalana);
+    $('statBroker').textContent = money(totalBroker);
+    $('statPhone').textContent = money(totalPhone + grandTotalBankDeposited);
+  }
+}
+
+window.editRecord = function(id) {
+  const r = records.find(x => x.id === id);
+  if (!r) return;
+  const role = getCurrentRole();
+  const isOperator = (role === 'hari' || role === 'shiva');
+  editingId = id;
+  $('formTitle').textContent = 'Edit Transaction';
+  $('saveBtn').textContent = 'Update Transaction';
+  $('entryType').value = r.entryType || 'Deed';
+  handleCategoryChange();
+
+  $('txDate').value = r.date;
+  $('deedName').value = r.deedName;
+  $('customerName').value = r.customerName;
+  $('village').value = r.village || '';
+  $('marketValue').value = r.marketValue || 0;
+  $('receivedAmount').value = r.received;
+  
+  $('chalana').value = r.chalana || 0;
+  $('brokerName').value = r.brokerName || '';
+  $('brokerCommission').value = r.brokerCommission || 0;
+  $('ecCustomerAmount').value = r.ecCustomerAmount || 0;
+  $('ecExpense').value = r.ecExpense || 0;
+  $('customerCashDeposited').value = r.customerCashDeposited || 0;
+
+  if (!isOperator) {
+    $('chalanaCharges').value = r.chalanaCharges || 0;
+    $('otherExpense').value = r.otherExpense || 0;
+  }
+  $('remarks').value = r.remarks || '';
+
+  const modeRadio = document.querySelector(`input[name="paymentMode"][value="${r.paymentMode}"]`);
+  if (modeRadio) modeRadio.checked = true;
+
+  $('cashAmount').value = r.cash;
+  $('phoneAmount').value = r.phone;
+  calculate();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
+window.deleteRecord = function(id) {
+  const isAdmin = getCurrentRole() === 'admin';
+  if (!isAdmin) {
+    alert('Only Admin has permission to delete transactions.');
+    return;
+  }
+  if (!window.confirm('Delete this transaction?')) return;
+  records = records.filter(x => x.id !== id);
+  localStorage.setItem('officeAccountRegisterRecords', JSON.stringify(records));
+  removeRecordFromCloud(id);
+  if (editingId === id) resetForm();
+  render();
+};
+
+['fFrom', 'fTo', 'fCategory', 'fMode', 'fSearch'].forEach(id => {
+  $(id).addEventListener('input', render);
+});
+
+$('clearFilterBtn').addEventListener('click', () => {
+  $('fFrom').value = '';
+  $('fTo').value = '';
+  $('fCategory').value = '';
+  $('fMode').value = '';
+  $('fSearch').value = '';
+  render();
+});
+
+$('exportBtn').addEventListener('click', () => {
+  const isAdmin = getCurrentRole() === 'admin';
+  const list = getFilteredList();
+  if (!list.length) {
+    alert('No records to download.');
+    return;
+  }
+  
+  let headers, keys;
+  if (isAdmin) {
+    headers = [
+      'Date', 'Approval Status', 'Entry Category', 'Deed Name / Purpose', 'Customer Name / Bank', 'Village', 'Market Value',
+      'Chalana Expense', 'Chalana Txn Charges', 'Broker / Mediator Name', 'Broker Commission',
+      'EC/Nakal Amount Given', 'EC/Nakal Expense', 'EC/Nakal Profit', 'Other Expense',
+      'Received / Total Amount', 'Cash Collected', 'Cash Deposited in Bank (From Customer/Direct)',
+      'Total Net Profit', 'Rajesh Share (50%)', 'Siva Share (25%)', 'Hari Share (25%)',
+      'Payment Mode', 'PhonePe Paid', 'Remarks', 'Entered By'
+    ];
+    keys = [
+      'date', 'status', 'entryType', 'deedName', 'customerName', 'village', 'marketValue',
+      'chalana', 'chalanaCharges', 'brokerName', 'brokerCommission',
+      'ecCustomerAmount', 'ecExpense', 'ecProfit', 'otherExpense',
+      'received', 'cash', 'customerCashDeposited',
+      'profit', 'rajesh', 'siva', 'hari',
+      'paymentMode', 'phone', 'remarks', 'enteredBy'
+    ];
+  } else {
+    headers = [
+      'Date', 'Status', 'Deed Name', 'Customer Name', 'Village', 'Market Value',
+      'Chalana Expense', 'Broker / Mediator Name', 'Broker Commission', 'EC/Nakal Amount Given', 'EC/Nakal Expense', 'Received Amount', 'Cash Collected', 'PhonePe Paid', 'Payment Mode', 'Remarks', 'Entered By'
+    ];
+    keys = [
+      'date', 'status', 'deedName', 'customerName', 'village', 'marketValue',
+      'chalana', 'brokerName', 'brokerCommission', 'ecCustomerAmount', 'ecExpense', 'received', 'cash', 'phone', 'paymentMode', 'remarks', 'enteredBy'
+    ];
+  }
+
+  const csv = [
+    headers,
+    ...list.map(r => {
+      const isDirect = r.entryType === 'Deposit';
+      const bankedVal = isDirect ? r.received : (r.customerCashDeposited || 0);
+      return keys.map(k => {
+        if (k === 'customerCashDeposited') return bankedVal;
+        return r[k] ?? '';
+      });
+    })
+  ].map(row => row.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\r\n');
+
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Office_Accounts_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+$('backupBtn').addEventListener('click', () => {
+  const data = JSON.stringify(records, null, 2);
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Office_Accounts_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+$('printBtn').addEventListener('click', () => window.print());
+
+// Initial load
+checkAuth();
+$('txDate').value = new Date().toISOString().slice(0, 10);
+handleCategoryChange();
+render();
+</script>
+</body>
+</html>
