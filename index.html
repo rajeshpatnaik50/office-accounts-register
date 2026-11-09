@@ -5,33 +5,48 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Office Accounts & Deed Register</title>
   <script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-  import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-  import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-  const rawConfig = (
-    apiKey: "AIzaSyAcig_CrHiHgTysJRZcIyQKpZpXVSPw6_k", 
-    authDomain: "office-ledger-f7561.firebaseapp.com", 
-    projectId: "office-ledger-f7561", 
-    storageBucket: "office-ledger-f7561.firebasestorage.app", 
-    messagingSenderId: "251861060629", 
-    appId: "1:251861060629:web:1f4f51b40953f4f7b8921c", 
-    measurementId: "G-SQ0PZYJ07E"
-    );
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
   
-  const appId = typeof __app_id !== 'undefined' ? __app_id : 'office-ledger-live';
-  const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-  let db = null;
-  let auth = null;
-
-  if (rawConfig) {
+    // Define updateCloudStatus early so it's ready when firebase connects
+    window.updateCloudStatus = function(isOnline) {
+      const dot = document.getElementById('cloudDot');
+      const txt = document.getElementById('cloudText');
+      if (!dot || !txt) return;
+      if (isOnline) {
+        dot.style.background = '#22c55e';
+        dot.style.boxShadow = '0 0 8px #22c55e';
+        txt.textContent = 'Live Cloud Sync 🟢';
+      } else {
+        dot.style.background = '#94a3b8';
+        dot.style.boxShadow = 'none';
+        txt.textContent = 'Device Storage';
+      }
+    };
+  
+    // Direct configuration object (No JSON.stringify needed)
+    const firebaseConfig = {
+      apiKey: "AIzaSyAcig_CrHiHgTysJRZcIyQKpZpXVSPw6_k", 
+      authDomain: "office-ledger-f7561.firebaseapp.com", 
+      projectId: "office-ledger-f7561", 
+      storageBucket: "office-ledger-f7561.firebasestorage.app", 
+      messagingSenderId: "251861060629", 
+      appId: "1:251861060629:web:1f4f51b40953f4f7b8921c", 
+      measurementId: "G-SQ0PZYJ07E"
+    };
+    
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'office-ledger-live';
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+  
+    let db = null;
+    let auth = null;
+  
     try {
-      const firebaseConfig = JSON.parse(rawConfig);
       const app = initializeApp(firebaseConfig);
       auth = getAuth(app);
       db = getFirestore(app);
-
+  
       // Expose firestore methods globally for live sync
       window.cloudDb = db;
       window.cloudAppId = appId;
@@ -39,23 +54,25 @@
       window.cloudSetDoc = setDoc;
       window.cloudDeleteDoc = deleteDoc;
       window.cloudCollection = collection;
-
+  
       const authPromise = initialAuthToken 
         ? signInWithCustomToken(auth, initialAuthToken) 
         : signInAnonymously(auth);
-
+  
       authPromise.then((userCred) => {
         const user = userCred.user;
         if (!user) return;
         window.updateCloudStatus(true);
-
+  
         const txCollection = collection(db, 'artifacts', appId, 'public', 'data', 'office_transactions');
         onSnapshot(txCollection, (snapshot) => {
           const remoteDocs = [];
           snapshot.forEach(docSnap => {
             remoteDocs.push(docSnap.data());
           });
-          window.syncRemoteRecords(remoteDocs);
+          if (typeof window.syncRemoteRecords === 'function') {
+            window.syncRemoteRecords(remoteDocs);
+          }
         }, (err) => {
           console.warn("Real-time cloud listener error:", err);
         });
@@ -67,11 +84,7 @@
       console.warn("Firebase initialization error:", e);
       window.updateCloudStatus(false);
     }
-  } else {
-    window.updateCloudStatus(false);
-  }
   </script>
-  
   
 
 <style>
