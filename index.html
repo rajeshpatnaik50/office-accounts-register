@@ -9,7 +9,6 @@
     import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
     import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    const rawConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'office-ledger-live';
     const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
     const firebaseConfig = {
